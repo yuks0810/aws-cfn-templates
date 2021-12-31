@@ -1,0 +1,200 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Create 3 EC2 instances for ALB sticky session (https://qiita.com/Uking/items/7663b07efa588a08709d)
+Parameters:
+  KeyName:
+    Description: The EC2 Key Pair to allow SSH access to the instance
+    Type: "AWS::EC2::KeyPair::KeyName"
+  MyIP:
+    Description: IP address allowed to access EC2
+    Type: String
+
+Resources:
+  # VPC作成
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.0.0.0/16
+      Tags:
+        - Key: Name
+          Value: sticky-sessoin-vpc
+
+  # インターネットゲートウェイ作成
+  IGW:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: sticky-sessoin-igw
+
+  # IGWをVPCにアタッチ
+  AttachGateway:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      # 作成する予定のVpcIdを取得したい場合は、`VpcId: !Ref VPC`と記述する
+      # 組み込み関数Refについて: https://docs.aws.amazon.com/ja_jp/AWSCloudFormation/latest/UserGuide/intrinsic-function-reference-ref.html
+      VpcId: !Ref VPC
+      InternetGatewayId: !Ref IGW
+
+  # サブネットの作成
+  PubSubServer1a:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone: ap-northeast-1a
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.1.0/24
+      Tags:
+        - Key: Name
+          Value: sticky-session-pubsub1
+  PubSubServer1d:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone: ap-northeast-1d
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.2.0/24
+      Tags:
+        - Key: Name
+          Value: sticky-session-pubsub2
+  PubSubServer1c:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone: ap-northeast-1c
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.3.0/24
+      Tags:
+        - Key: Name
+          Value: sticky-session-pubsub3
+
+  # Route tableの作成
+  PubSubRT:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: sticky-session-pubsub-rt
+
+  # PubSub-インターネット間のルーティング
+  PubSubToInternet:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PubSubRT
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref IGW
+
+  # ルートテーブルをサブネットに関連付け
+  AssoPubSubRT1a:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PubSubServer1a
+      RouteTableId: !Ref PubSubRT
+  AssoPubSubRT1b:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PubSubServer1d
+      RouteTableId: !Ref PubSubRT
+  AssoPubSubRT1c:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PubSubServer1c
+      RouteTableId: !Ref PubSubRT
+  
+  # EC2作成
+  EC2Server1: 
+    Type: AWS::EC2::Instance
+    Properties: 
+      ImageId: ami-00d101850e971728d
+      KeyName: !Ref KeyName
+      InstanceType: t2.micro
+      NetworkInterfaces: 
+        - AssociatePublicIpAddress: "true"
+          DeviceIndex: "0"
+          SubnetId: !Ref PubSubServer1a
+          GroupSet:
+            - !Ref EC2SG
+      UserData:
+        Fn::Base64: |
+          #!/bin/bash
+          yum -y update
+          yum -y install httpd
+          systemctl start httpd
+          systemctl enable httpd
+          echo "<h1>Sticky session from <u style='color:red;'> Hellow World Red! </u></h1>" > /var/www/html/index.html
+      Tags:
+          - Key: Name
+            Value: sticky-session-ec2-server1
+  EC2Server2: 
+    Type: AWS::EC2::Instance
+    Properties: 
+      ImageId: ami-00d101850e971728d
+      KeyName: !Ref KeyName
+      InstanceType: t2.micro
+      NetworkInterfaces: 
+        - AssociatePublicIpAddress: "true"
+          DeviceIndex: "0"
+          SubnetId: !Ref PubSubServer1d
+          GroupSet:
+            - !Ref EC2SG
+      UserData:
+        Fn::Base64: |
+          #!/bin/bash
+          yum -y update
+          yum -y install httpd
+          systemctl start httpd
+          systemctl enable httpd
+          echo "<h1>Sticky session from <u style='color:green;'> Hello World Green! </u></h1>" > /var/www/html/index.html
+      Tags:
+          - Key: Name
+            Value: sticky-session-ec2-server2
+  EC2Server3: 
+    Type: AWS::EC2::Instance
+    Properties: 
+      ImageId: ami-00d101850e971728d
+      KeyName: !Ref KeyName
+      InstanceType: t2.micro
+      NetworkInterfaces: 
+        - AssociatePublicIpAddress: "true"
+          DeviceIndex: "0"
+          SubnetId: !Ref PubSubServer1c
+          GroupSet:
+            - !Ref EC2SG
+      UserData:
+        Fn::Base64: |
+          #!/bin/bash
+          yum -y update
+          yum -y install httpd
+          systemctl start httpd
+          systemctl enable httpd
+          echo "<h1>Sticky session from <u style='color:blue;'> Hello World Blue! </u></h1>" > /var/www/html/index.html
+        
+      Tags:
+          - Key: Name
+            Value: sticky-session-ec2-server3
+
+  # sercurity group 作成
+  EC2SG:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: sticky-session-ec2-ec2-sg
+      GroupDescription: Allow SSH and HTTP access only MyIP
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        # http
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: "0.0.0.0/0"
+        # https
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: "0.0.0.0/0"
+        # ssh
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: "0.0.0.0/0"
+
+Outputs:
+  EC2PublicIP:
+    Value: !GetAtt EC2Server1.PublicIp
+    Description: Public IP of EC2 instance
